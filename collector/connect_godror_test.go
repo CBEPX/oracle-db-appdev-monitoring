@@ -5,7 +5,11 @@
 
 package collector
 
-import "testing"
+import (
+	"io"
+	"log/slog"
+	"testing"
+)
 
 func TestEffectiveSQLPoolLimitsUseSQLSettingsForGodror(t *testing.T) {
 	maxOpenConns := 10
@@ -38,5 +42,56 @@ func TestWarmupConnectionPoolSizePreservesGodrorPoolFallback(t *testing.T) {
 
 	if got := warmupConnectionPoolSize(config); got != poolMaxConnections {
 		t.Fatalf("expected warmup to keep existing poolMaxConnections fallback, got %d", got)
+	}
+}
+
+func discardLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+
+func TestConnectionParamsPoolKeysSelectNativePool(t *testing.T) {
+	poolMin, poolMax, poolInc := 1, 5, 1
+	config := DatabaseConfig{Username: "user", Password: "secret", URL: "db.example:1521/svc", ConnectConfig: ConnectConfig{
+		PoolMinConnections: &poolMin,
+		PoolMaxConnections: &poolMax,
+		PoolIncrement:      &poolInc,
+	}}
+
+	P, err := connectionParams(discardLogger(), "db", config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if P.IsStandalone() {
+		t.Fatalf("pool* keys are set but godror would open standalone connections (StandaloneConnection=%+v)", P.StandaloneConnection)
+	}
+	if P.PoolParams.MinSessions != poolMin || P.PoolParams.MaxSessions != poolMax || P.PoolParams.SessionIncrement != poolInc {
+		t.Fatalf("pool params not propagated: %+v", P.PoolParams)
+	}
+}
+
+func TestConnectionParamsWithoutPoolKeysKeepGodrorDefault(t *testing.T) {
+	config := DatabaseConfig{Username: "user", Password: "secret", URL: "db.example:1521/svc"}
+
+	P, err := connectionParams(discardLogger(), "db", config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if P.StandaloneConnection.Valid {
+		t.Fatalf("no pool* keys: connection mode must stay at godror default, got %+v", P.StandaloneConnection)
+	}
+}
+
+func TestConnectionParamsAdminRoleStaysStandalone(t *testing.T) {
+	poolMax := 5
+	config := DatabaseConfig{Username: "sys", Password: "secret", URL: "db.example:1521/svc", ConnectConfig: ConnectConfig{
+		Role:               "SYSDBA",
+		PoolMaxConnections: &poolMax,
+	}}
+
+	P, err := connectionParams(discardLogger(), "db", config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// godror forces standalone connections for administrative roles.
+	if !P.IsStandalone() {
+		t.Fatalf("SYSDBA must remain standalone in godror, got %+v", P)
 	}
 }

@@ -19,14 +19,26 @@ import (
 func connect(logger *slog.Logger, dbname string, dbconfig DatabaseConfig) (*sql.DB, error) {
 	logger.Debug("Launching connection to "+maskDsn(dbconfig.URL), "database", dbname)
 
-	var P godror.ConnectionParams
-	password, err := dbconfig.GetPassword()
+	P, err := connectionParams(logger, dbname, dbconfig)
 	if err != nil {
 		return nil, err
 	}
+	// note that this just configures the connection, it does not actually connect until later
+	// when we call db.Ping()
+	db := sql.OpenDB(godror.NewConnector(P))
+	return db, nil
+}
+
+// connectionParams translates the exporter database config into godror connection parameters.
+func connectionParams(logger *slog.Logger, dbname string, dbconfig DatabaseConfig) (godror.ConnectionParams, error) {
+	var P godror.ConnectionParams
+	password, err := dbconfig.GetPassword()
+	if err != nil {
+		return P, err
+	}
 	username, err := dbconfig.GetUsername()
 	if err != nil {
-		return nil, err
+		return P, err
 	}
 	// If password is not specified, externalAuth will be true, and we'll ignore user input
 	dbconfig.ExternalAuth = password == ""
@@ -58,6 +70,13 @@ func connect(logger *slog.Logger, dbname string, dbconfig DatabaseConfig) (*sql.
 
 	P.PoolParams.WaitTimeout = time.Second * 5
 
+	// godror defaults to standalone connections and then ignores PoolParams; opt into the
+	// ODPI-C session pool documented for poolMinConnections/poolMaxConnections/poolIncrement.
+	// (Administrative roles such as SYSDBA are always standalone in godror.)
+	if dbconfig.GetPoolIncrement() > 0 || dbconfig.GetPoolMaxConnections() > 0 || dbconfig.GetPoolMinConnections() > 0 {
+		P.StandaloneConnection = sql.NullBool{Bool: false, Valid: true}
+	}
+
 	// if TNS_ADMIN env var is set, set ConfigDir to that location
 	P.ConfigDir = dbconfig.TNSAdmin
 
@@ -80,10 +99,7 @@ func connect(logger *slog.Logger, dbname string, dbconfig DatabaseConfig) (*sql.
 		P.AdminRole = dsn.NoRole
 	}
 
-	// note that this just configures the connection, it does not actually connect until later
-	// when we call db.Ping()
-	db := sql.OpenDB(godror.NewConnector(P))
-	return db, nil
+	return P, nil
 }
 
 func effectiveSQLPoolLimits(dbconfig DatabaseConfig) (int, int) {
