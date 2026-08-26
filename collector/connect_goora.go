@@ -102,7 +102,7 @@ func isTemporaryConnectionError(err error) bool {
 		return false
 	}
 	switch oraErr.ErrCode {
-	case ora01033code, ora03113code, ora03114code, ora12537code:
+	case ora01033code, ora03113code, ora03114code, ora12537code, ora12541code:
 		return true
 	default:
 		return false
