@@ -47,6 +47,7 @@ func connectionParams(logger *slog.Logger, dbname string, dbconfig DatabaseConfi
 	if dbconfig.ExternalAuth {
 		msg = "Database Password not specified; will attempt to use external authentication (ignoring user input)."
 		dbconfig.Username = ""
+		username = "" // the local copy was fetched before this branch; clear it too
 	}
 	logger.Info(msg, "database", dbname)
 	externalAuth := sql.NullBool{
@@ -71,9 +72,10 @@ func connectionParams(logger *slog.Logger, dbname string, dbconfig DatabaseConfi
 	P.PoolParams.WaitTimeout = time.Second * 5
 
 	// godror defaults to standalone connections and then ignores PoolParams; opt into the
-	// ODPI-C session pool documented for poolMinConnections/poolMaxConnections/poolIncrement.
-	// (Administrative roles such as SYSDBA are always standalone in godror.)
-	if dbconfig.GetPoolIncrement() > 0 || dbconfig.GetPoolMaxConnections() > 0 || dbconfig.GetPoolMinConnections() > 0 {
+	// ODPI-C session pool whenever any pool* key is present in the config, including
+	// explicit zero values. (Administrative roles such as SYSDBA are always standalone
+	// in godror.)
+	if dbconfig.PoolIncrement != nil || dbconfig.PoolMaxConnections != nil || dbconfig.PoolMinConnections != nil {
 		P.StandaloneConnection = sql.NullBool{Bool: false, Valid: true}
 	}
 
@@ -110,6 +112,11 @@ func warmupConnectionPoolSize(dbconfig DatabaseConfig) int {
 	poolSize := dbconfig.GetMaxOpenConns()
 	if poolSize < 1 {
 		poolSize = dbconfig.GetPoolMaxConnections()
+	}
+	// Warmup holds every acquired connection until the loop ends; the native pool
+	// cannot hand out more than MaxSessions, so cap to avoid WaitTimeout errors.
+	if poolMax := dbconfig.GetPoolMaxConnections(); poolMax > 0 && poolSize > poolMax {
+		poolSize = poolMax
 	}
 	return poolSize
 }

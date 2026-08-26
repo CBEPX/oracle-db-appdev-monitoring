@@ -95,3 +95,46 @@ func TestConnectionParamsAdminRoleStaysStandalone(t *testing.T) {
 		t.Fatalf("SYSDBA must remain standalone in godror, got %+v", P)
 	}
 }
+
+func TestConnectionParamsZeroValuedPoolKeySelectsPool(t *testing.T) {
+	poolMin := 0 // present but zero: still an explicit request for the native pool
+	config := DatabaseConfig{Username: "user", Password: "secret", URL: "db.example:1521/svc", ConnectConfig: ConnectConfig{
+		PoolMinConnections: &poolMin,
+	}}
+
+	P, err := connectionParams(discardLogger(), "db", config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if P.IsStandalone() {
+		t.Fatalf("poolMinConnections: 0 is present but the connection stays standalone: %+v", P.StandaloneConnection)
+	}
+}
+
+func TestConnectionParamsExternalAuthClearsUsername(t *testing.T) {
+	config := DatabaseConfig{Username: "ignored", Password: "", URL: "db.example:1521/svc"}
+
+	P, err := connectionParams(discardLogger(), "db", config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !P.ExternalAuth.Valid || !P.ExternalAuth.Bool {
+		t.Fatalf("empty password must select external auth, got %+v", P.ExternalAuth)
+	}
+	if P.Username != "" {
+		t.Fatalf("external auth must ignore the configured username, got %q", P.Username)
+	}
+}
+
+func TestWarmupConnectionPoolSizeCappedByPoolMax(t *testing.T) {
+	maxOpenConns := 10
+	poolMax := 4
+	config := DatabaseConfig{ConnectConfig: ConnectConfig{
+		MaxOpenConns:       &maxOpenConns,
+		PoolMaxConnections: &poolMax,
+	}}
+
+	if got := warmupConnectionPoolSize(config); got != poolMax {
+		t.Fatalf("warmup must not exceed the native pool MaxSessions: got %d, want %d", got, poolMax)
+	}
+}
